@@ -1,1 +1,2 @@
 robosuite-venv/
+datasets/*.hdf5

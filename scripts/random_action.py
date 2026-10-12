@@ -23,6 +23,7 @@ obs = env.reset()
 
 print("Observation keys:", obs.keys())
 print("Action dimension:", env.action_dim)
+print(f"Action limits: {low} - {high}")
 
 # Execute random actions
 for step in range(1000):
