@@ -1,4 +1,4 @@
-# Robot Learning with Imitation Learning
+# Robot Learning with Imitation Learning and World Models
 
 This project explores modern robot learning for manipulation using
 imitation learning and world models. It uses robotic demonstration datasets to learn generative

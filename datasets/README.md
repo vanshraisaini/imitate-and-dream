@@ -1,0 +1,1 @@
+Kindly refer to [this](https://github.com/ARISE-Initiative/robomimic/blob/master/docs/datasets/robomimic_v0.1.md?utm_source=chatgpt.com) file to install datasets.
