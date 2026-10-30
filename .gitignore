@@ -1,3 +1,4 @@
 robosuite-venv/
 datasets/*.hdf5
 **/__pycache__/
+**/*.pt
