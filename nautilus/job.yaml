@@ -1,0 +1,62 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: imitate-policy-training
+spec:
+  backoffLimit: 0
+  template:
+    metadata:
+      name: imitate-policy-training
+    spec:
+      restartPolicy: Never
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  - key: nvidia.com/gpu.product
+                    operator: In
+                    values:
+                      - NVIDIA-GeForce-RTX-3090
+                      - NVIDIA-GeForce-RTX-4090
+      containers:
+        - name: imitate-policy-training
+          image: vanshrai/imitate-and-dream:v0
+          command: ["bash", "-c", "git pull origin main && python3 -m scripts.train_policy 
+            --dataset=./datasets/lift_image_v15.hdf5 
+            --epochs=100
+            --batch_size=64
+            --lr=0.0001
+            --weight_decay=0.0001
+            --warmup_steps=500
+            --ema_decay=0.995
+            --save_every=10"
+          ]
+          env:
+            - name: WANDB_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: vrs-wandb-secret
+                  key: api-key
+          resources:
+            requests:
+              cpu: "4"
+              memory: "32Gi"
+              nvidia.com/gpu: 1
+            limits:
+              cpu: "4"
+              memory: "32Gi"
+              nvidia.com/gpu: 1
+          volumeMounts:
+          #   - name: data
+          #     mountPath: /pvc
+            - name: dshm
+              mountPath: /dev/shm
+      volumes:
+        # - name: data
+        #   persistentVolumeClaim:
+        #     claimName: streamvln-pvc
+        - name: dshm
+          emptyDir:
+            medium: Memory
+            sizeLimit: 8Gi
