@@ -19,4 +19,7 @@ ENV PATH=/opt/conda/envs/app/bin:$PATH
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY . /workspace
+COPY ./datasets /workspace/datasets
+COPY ./models /workspace/models
+COPY ./scripts /workspace/scripts/
+COPY .git/ /workspace/.git/

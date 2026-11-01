@@ -1,5 +1,6 @@
 import json
 import os
+import time
 
 import cv2
 import h5py
@@ -18,6 +19,10 @@ CHECKPOINT_NAME = "checkpoints/policy.pt"
 DATASET_PATH = "./datasets/lift_image_v15.hdf5"  # env settings + reference frames; set to None to skip
 DEBUG_DIR = "debug"
 RENDER_GUI = True
+NUM_ROLLOUTS = 5  # number of episodes to run
+RECORD_VIDEO = True  # save an mp4 of every rollout (agent view | wrist view)
+VIDEO_DIR = "videos"  # each run writes into VIDEO_DIR/<timestamp>/
+VIDEO_SIZE = 256  # height and width of each camera view in the video
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 NUM_FLOW_STEPS = 10
 NUM_EVAL_STEPS = 100
@@ -118,6 +123,50 @@ def save_comparison(obs):
     print(f"Saved comparison (left: dataset, right: environment) to {path}")
 
 
+class VideoRecorder:
+    """Writes RGB frames to an mp4 file.
+
+    Uses imageio (H.264, plays everywhere) when `pip install imageio imageio-ffmpeg` is available,
+    otherwise falls back to OpenCV's mp4v codec (plays in VLC / most desktop players, not in browsers).
+    """
+
+    def __init__(self, path, fps, frame_shape):
+        try:
+            import imageio
+
+            writer = imageio.get_writer(path, fps=fps, codec="libx264", pixelformat="yuv420p",
+                                        quality=8, macro_block_size=1)
+            self._write, self._close = writer.append_data, writer.close
+        except Exception as e:  # imageio / imageio-ffmpeg missing
+            print(f"imageio unavailable ({type(e).__name__}); recording with OpenCV mp4v instead")
+            height, width = frame_shape[:2]
+            writer = cv2.VideoWriter(path, cv2.VideoWriter_fourcc(*"mp4v"), fps, (width, height))
+            self._write = lambda frame: writer.write(cv2.cvtColor(frame, cv2.COLOR_RGB2BGR))
+            self._close = writer.release
+
+    def write(self, frame):
+        self._write(frame)
+
+    def close(self):
+        self._close()
+
+
+def render_frame(env, label):
+    """Agent view and wrist view side by side (upright, VIDEO_SIZE px each) with a text label."""
+
+    # sim.render always returns OpenGL (upside-down) images, independent of IMAGE_CONVENTION -> flip
+    views = [
+        env.sim.render(camera_name=camera, width=VIDEO_SIZE, height=VIDEO_SIZE)[::-1]
+        for camera in ("agentview", "robot0_eye_in_hand")
+    ]
+    frame = np.ascontiguousarray(np.concatenate(views, axis=1))
+
+    for color, thickness in (((0, 0, 0), 3), ((255, 255, 255), 1)):  # outlined text, readable on any background
+        cv2.putText(frame, label, (6, 18), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, thickness, cv2.LINE_AA)
+
+    return frame
+
+
 def preprocess_image(image):
     """Convert HWC image to normalized BCHW tensor."""
 
@@ -173,38 +222,62 @@ def predict_action_chunk(model, obs):
     return action_chunk.squeeze(0).cpu().numpy()
 
 
-def evaluate_policy(env, model):
-    """Execute action chunks using receding-horizon control."""
+def evaluate_policy(env, model, rollout_idx=0, video_dir=None):
+    """Execute action chunks using receding-horizon control. Returns True if the rollout succeeded."""
 
     obs = env.reset()
-    save_comparison(obs)
+    if rollout_idx == 0:
+        save_comparison(obs)
+
+    recorder, video_path = None, None
+    if video_dir is not None:
+        os.makedirs(video_dir, exist_ok=True)
+        video_path = os.path.join(video_dir, f"rollout_{rollout_idx:03d}.mp4")
+        first_frame = render_frame(env, f"rollout {rollout_idx}  t=0")
+        recorder = VideoRecorder(video_path, int(env.control_freq), first_frame.shape)
+        recorder.write(first_frame)
 
     reward, done, success = 0.0, False, False
-    for step in range(NUM_EVAL_STEPS):
+    try:
+        for step in range(NUM_EVAL_STEPS):
 
-        action_chunk = predict_action_chunk(model, obs)
+            action_chunk = predict_action_chunk(model, obs)
 
-        # Execute the first EXECUTION_HORIZON actions of the predicted chunk
-        for action in action_chunk[:EXECUTION_HORIZON]:
+            # Execute the first EXECUTION_HORIZON actions of the predicted chunk
+            for action in action_chunk[:EXECUTION_HORIZON]:
 
-            obs, reward, done, info = env.step(action)
+                obs, reward, done, info = env.step(action)
 
-            if RENDER_GUI:
-                env.render()
+                if RENDER_GUI:
+                    env.render()
 
-            # robosuite's `done` only fires at the horizon (1000 steps); success must be checked explicitly
-            success = env._check_success()
+                # robosuite's `done` only fires at the horizon (1000 steps); success must be checked explicitly
+                success = env._check_success()
+
+                if recorder is not None:
+                    label = f"rollout {rollout_idx}  t={env.timestep}" + ("  SUCCESS" if success else "")
+                    recorder.write(render_frame(env, label))
+
+                if done or success:
+                    break
 
             if done or success:
                 break
 
-        if done or success:
-            break
+            if step % 20 == 0:
+                print(f"Step: {step} | Reward: {reward:.4f}")
+    finally:
+        if recorder is not None:
+            recorder.close()
 
-        if step % 20 == 0:
-            print(f"Step: {step} | Reward: {reward:.4f}")
+    print(f"Rollout {rollout_idx + 1}: {'SUCCESS' if success else 'no success'} after {env.timestep} env steps")
 
-    print(f"Episode finished: {'SUCCESS' if success else 'no success'} after {env.timestep} env steps")
+    if video_path is not None:  # mark the outcome in the file name
+        final_path = video_path.replace(".mp4", "_success.mp4" if success else "_fail.mp4")
+        os.replace(video_path, final_path)
+        print(f"Saved video to {final_path}")
+
+    return success
 
 
 def main():
@@ -213,11 +286,20 @@ def main():
 
     env = create_environment()
 
+    video_dir = os.path.join(VIDEO_DIR, time.strftime("%Y%m%d_%H%M%S")) if RECORD_VIDEO else None
+
+    results = []
     try:
-        evaluate_policy(env, model)
+        for rollout_idx in range(NUM_ROLLOUTS):
+            print(f"\n=== Rollout {rollout_idx + 1}/{NUM_ROLLOUTS} ===")
+            results.append(evaluate_policy(env, model, rollout_idx, video_dir))
 
     finally:
         env.close()
+
+    print(f"\nSuccess rate: {sum(results)}/{len(results)}")
+    if video_dir is not None:
+        print(f"Videos saved in {video_dir}")
 
 
 if __name__ == "__main__":
