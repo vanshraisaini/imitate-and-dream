@@ -15,18 +15,18 @@ from models.imitation_policy.policy import FlowMatchingPolicy
 # (robomimic uses the OpenCV convention). This MUST be set before the environment is created.
 macros.IMAGE_CONVENTION = "opencv"
 
-CHECKPOINT_NAME = "checkpoints/policy.pt"
-DATASET_PATH = "./datasets/lift_image_v15.hdf5"  # env settings + reference frames; set to None to skip
+CHECKPOINT_NAME = "checkpoints/nutAssemblyPolicy_3000_epoch.pt"
+DATASET_PATH = "./datasets/square_image_v15.hdf5"  # env settings + reference frames; set to None to skip
 DEBUG_DIR = "debug"
 RENDER_GUI = True
-NUM_ROLLOUTS = 5  # number of episodes to run
-RECORD_VIDEO = True  # save an mp4 of every rollout (agent view | wrist view)
+NUM_ROLLOUTS = 30  # number of episodes to run
+RECORD_VIDEO = False  # save an mp4 of every rollout (agent view | wrist view)
 VIDEO_DIR = "videos"  # each run writes into VIDEO_DIR/<timestamp>/
 VIDEO_SIZE = 256  # height and width of each camera view in the video
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 NUM_FLOW_STEPS = 10
 NUM_EVAL_STEPS = 100
-EXECUTION_HORIZON = 8
+EXECUTION_HORIZON = 8   
 
 
 def load_model(checkpoint_path):

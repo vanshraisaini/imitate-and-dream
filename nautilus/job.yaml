@@ -3,28 +3,44 @@ kind: Job
 metadata:
   name: imitate-policy-training
 spec:
-  backoffLimit: 0
+  backoffLimit: 3
   template:
     metadata:
       name: imitate-policy-training
     spec:
       restartPolicy: Never
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  # Skip nodes with a lost GPU (add more hostnames if others fail)
+                  - key: kubernetes.io/hostname
+                    operator: NotIn
+                    values:
+                      - k8s-chase-ci-07.calit2.optiputer.net
+                  # Request NVIDIA L4 specifically (verify the label value with:
+                  # kubectl get nodes -L nvidia.com/gpu.product | grep -i l4)
+                  - key: nvidia.com/gpu.product
+                    operator: In
+                    values:
+                      - NVIDIA-L4
       containers:
         - name: imitate-policy-training
-          image: vanshrai/imitate-and-dream:v0
+          image: vanshrai/imitate-and-dream:v0.1
           command:
             - bash
             - -c
             - |
               git stash && git pull origin main && python3 -m scripts.train_policy \
                 --dataset=./datasets/square_image_v15.hdf5 \
-                --epochs=500 \
+                --epochs=3000 \
                 --batch_size=64 \
                 --lr=0.0001 \
                 --weight_decay=0.0001 \
-                --warmup_steps=500 \
+                --warmup_steps=1000 \
                 --ema_decay=0.995 \
-                --save_every=500
+                --save_every=1000
           env:
             - name: WANDB_API_KEY
               valueFrom:
