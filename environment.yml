@@ -1,0 +1,12 @@
+name: imitate-and-dream
+channels:
+  - defaults
+dependencies:
+  - python=3.12
+  - pip
+  - cmake<4
+  - pip:
+      - -r requirements-local.txt
+variables:
+  MUJOCO_GL: egl
+  PYOPENGL_PLATFORM: egl
