@@ -8,11 +8,20 @@ Usage:
     python -m scripts.test_oracle_success run --num-seeds 10 --runs-per-seed 5
     python -m scripts.test_oracle_success analyze
 
+Sharding: split the seeds across N independent processes (each has its own env and policy copy).
+Worker w handles seeds w, w+N, w+2N, ... and writes episodes_w<w>.jsonl. Launch all workers, e.g.
+    for w in 0 1 2 3; do
+        CUDA_VISIBLE_DEVICES=0 python -m scripts.test_oracle_success run --worker $w --num-workers 4 &
+    done; wait
+(set CUDA_VISIBLE_DEVICES per worker to spread them over GPUs), then run `analyze` once to merge everything.
+Results do not depend on the number of workers: every (seed, run) is seeded on its own.
+
 To watch different runs of the same start state: set RENDER_GUI = True and run
     python -m scripts.test_oracle_success run --num-seeds 1 --runs-per-seed 5
 """
 
 import argparse
+import glob
 import hashlib
 import json
 import os
@@ -165,18 +174,46 @@ def run_episode(env, model, seed, run_idx):
             "env_steps": int(env.timestep), "init_fp": fingerprint}
 
 
-def cmd_run(args):
-    os.makedirs(OUT_DIR, exist_ok=True)
-    out_path = os.path.join(OUT_DIR, "episodes_gui.jsonl" if RENDER_GUI else "episodes.jsonl")
+def result_files():
+    """All result files `analyze` merges: the unsharded episodes.jsonl (if present) and every worker file."""
+    paths = [os.path.join(OUT_DIR, "episodes.jsonl")]
+    paths += sorted(glob.glob(os.path.join(OUT_DIR, "episodes_w*.jsonl")))
+    return [p for p in paths if os.path.exists(p)]
 
-    done_keys = set()
-    if os.path.exists(out_path):  # resume
-        with open(out_path) as f:
+
+def read_records(paths):
+    """Read episode records, keeping one record per (seed, run) even if it appears in several files."""
+    records = {}
+    for path in paths:
+        with open(path) as f:
             for line in f:
-                r = json.loads(line)
-                done_keys.add((r["seed"], r["run"]))
+                if not line.strip():
+                    continue
+                try:
+                    r = json.loads(line)
+                except json.JSONDecodeError:  # truncated last line (killed mid-write, or a worker is writing now)
+                    continue
+                records[(r["seed"], r["run"])] = r
+    return records
 
-    seeds = list(range(args.num_seeds))
+
+def cmd_run(args):
+    if not 0 <= args.worker < args.num_workers:
+        raise SystemExit(f"--worker must be in [0, {args.num_workers - 1}], got {args.worker}")
+
+    os.makedirs(OUT_DIR, exist_ok=True)
+    if RENDER_GUI:
+        out_path = os.path.join(OUT_DIR, "episodes_gui.jsonl")
+        resume_paths = [out_path]
+    else:
+        out_path = os.path.join(OUT_DIR, f"episodes_w{args.worker}.jsonl")
+        # Skip anything finished in ANY earlier launch, whatever its --num-workers was. The seed -> worker
+        # mapping changes with the worker count, so a worker's own file alone is not enough.
+        resume_paths = result_files()
+    done_keys = set(read_records([p for p in resume_paths if os.path.exists(p)]))
+
+    seeds = list(range(args.num_seeds))[args.worker::args.num_workers]  # interleaved: balanced load
+    print(f"[worker {args.worker}/{args.num_workers}] {len(seeds)} seeds: {seeds[:5]}{'...' if len(seeds) > 5 else ''}")
     model, env = load_model(CHECKPOINT_NAME), create_environment()
 
     t0, n_done = time.time(), 0
@@ -191,7 +228,7 @@ def cmd_run(args):
                     f.write(json.dumps(rec) + "\n")
                     f.flush()
                     n_done += 1
-                    print(f"seed {seed:3d} run {run_idx:2d} "
+                    print(f"[w{args.worker}] seed {seed:3d} run {run_idx:2d} "
                           f"{'SUCCESS' if rec['success'] else 'fail   '} "
                           f"({(time.time() - t0) / n_done:.1f}s/episode)")
     finally:
@@ -208,11 +245,11 @@ def pass_at_k(n, c, k):
 def cmd_analyze(args):
     per_seed = {}   # seed -> list of success flags
     fps = {}        # seed -> set of init fingerprints
-    with open(os.path.join(OUT_DIR, "episodes.jsonl")) as f:
-        for line in f:
-            r = json.loads(line)
-            per_seed.setdefault(r["seed"], []).append(r["success"])
-            fps.setdefault(r["seed"], set()).add(r["init_fp"])
+    paths = result_files()
+    print(f"Reading {len(paths)} result file(s): {[os.path.basename(p) for p in paths]}")
+    for (seed, _run), r in sorted(read_records(paths).items()):
+        per_seed.setdefault(seed, []).append(r["success"])
+        fps.setdefault(seed, set()).add(r["init_fp"])
 
     if not per_seed:
         print("No results found.")
@@ -255,7 +292,7 @@ def cmd_analyze(args):
 
         fig, ax = plt.subplots(1, 2, figsize=(10, 4))
         ax[0].plot(list(curve), list(curve.values()), marker="o")
-        ax[0].set_xscale("log")
+        # ax[0].set_xscale("log")
         ax[0].set_xlabel("K")
         ax[0].set_ylabel("pass@K (oracle success)")
         ax[0].set_ylim(0, 1)
@@ -278,6 +315,8 @@ if __name__ == "__main__":
     p_run = sub.add_parser("run")
     p_run.add_argument("--num-seeds", type=int, default=100)
     p_run.add_argument("--runs-per-seed", type=int, default=20)
+    p_run.add_argument("--worker", type=int, default=0, help="index of this worker (0-based)")
+    p_run.add_argument("--num-workers", type=int, default=1, help="total number of worker processes")
     p_run.set_defaults(fn=cmd_run)
 
     p_an = sub.add_parser("analyze")
