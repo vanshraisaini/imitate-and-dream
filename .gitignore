@@ -1,14 +1,12 @@
 robosuite-venv/
-datasets/*.hdf5
+datasets/**/*.hdf5
 **/__pycache__/
 **/*.pt
 checkpoints/
 debug/
 videos/
-# Downloaded datasets and intermediate downloads at any nesting level
 datasets/**/*.hdf5
 datasets/**/*.part
-
-# Local setup, run logs, reports, and generated previews
 /artifacts/
 .pytest_cache/
+results/
