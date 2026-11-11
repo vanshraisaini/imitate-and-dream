@@ -5,4 +5,8 @@ datasets/**/*.hdf5
 checkpoints/
 debug/
 videos/
+datasets/**/*.hdf5
+datasets/**/*.part
+/artifacts/
+.pytest_cache/
 results/

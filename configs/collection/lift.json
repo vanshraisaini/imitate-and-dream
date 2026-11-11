@@ -1,0 +1,11 @@
+{
+  "env_name": "Lift",
+  "env_kwargs": {
+    "robots": "Panda",
+    "control_freq": 20,
+    "camera_heights": 84,
+    "camera_widths": 84,
+    "use_object_obs": true,
+    "reward_shaping": false
+  }
+}
