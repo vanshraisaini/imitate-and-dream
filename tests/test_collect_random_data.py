@@ -3,7 +3,7 @@ import h5py
 import numpy as np
 import pytest
 
-from scripts.collect_random_data import collect, parse_args, resolve_config
+from scripts.datasets.collect_random_data import collect, parse_args, resolve_config
 
 
 IMAGE_KEYS = ("agentview_image", "robot0_eye_in_hand_image")

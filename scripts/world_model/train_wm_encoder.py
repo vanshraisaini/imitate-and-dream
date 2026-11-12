@@ -11,7 +11,7 @@ Batches are balanced so that a fraction --demo_frac of frames are demonstrations
 Validation holds out --val_frac of the episodes of each source.
 
 Example:
-  python -m scripts.train_wm_encoder \
+  python -m scripts.world_model.train_wm_encoder \
       --demo_datasets datasets/square_image_v15.hdf5 \
       --random_datasets datasets/random/square_random.hdf5 --epochs 30 --amp
 """
@@ -26,13 +26,13 @@ import wandb
 from torch.utils.data import DataLoader, WeightedRandomSampler
 from tqdm import tqdm
 
-from models.imitation_policy.augment import random_shift
+from models.common.augment import random_shift
 from models.world_model.aux_head import AuxStateHead, aux_loss
 from models.world_model.aux_head import eval_metrics as aux_metrics
 from models.world_model.latent_encoder import LatentEncoder, LatentEncoderConfig
 from models.world_model.progress_head import ProgressHead, progress_loss
 from models.world_model.progress_head import eval_metrics as progress_metrics
-from scripts.encoder_wm_dataset import EncoderWMDataset, Source, split_episodes
+from scripts.datasets.encoder_wm_dataset import EncoderWMDataset, Source, split_episodes
 
 
 # ------------------------------------------------------------------ helpers

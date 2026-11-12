@@ -59,7 +59,7 @@ additional transitions using this environment reference. For a short check:
 
 ```bash
 python -m pytest -q
-python -m scripts.collect_random_data \
+python -m scripts.datasets.collect_random_data \
   --reference-dataset datasets/square_image_v15.hdf5 \
   --output datasets/random/square_check.hdf5 \
   --episodes 2 --steps-per-episode 16 --seed 42

@@ -5,19 +5,19 @@ different sampling noise). A seed counts as an oracle success at K if any of K r
 we use the unbiased pass@K estimator so one set of N runs gives the whole curve.
 
 Usage:
-    python -m scripts.test_oracle_success run --num-seeds 10 --runs-per-seed 5
-    python -m scripts.test_oracle_success analyze
+    python -m scripts.imitation_poilcy.test_oracle_success run --num-seeds 10 --runs-per-seed 5
+    python -m scripts.imitation_poilcy.test_oracle_success analyze
 
 Sharding: split the seeds across N independent processes (each has its own env and policy copy).
 Worker w handles seeds w, w+N, w+2N, ... and writes episodes_w<w>.jsonl. Launch all workers, e.g.
     for w in 0 1 2 3; do
-        CUDA_VISIBLE_DEVICES=0 python -m scripts.test_oracle_success run --worker $w --num-workers 4 &
+        CUDA_VISIBLE_DEVICES=0 python -m scripts.imitation_poilcy.test_oracle_success run --worker $w --num-workers 4 &
     done; wait
 (set CUDA_VISIBLE_DEVICES per worker to spread them over GPUs), then run `analyze` once to merge everything.
 Results do not depend on the number of workers: every (seed, run) is seeded on its own.
 
 To watch different runs of the same start state: set RENDER_GUI = True and run
-    python -m scripts.test_oracle_success run --num-seeds 1 --runs-per-seed 5
+    python -m scripts.imitation_poilcy.test_oracle_success run --num-seeds 1 --runs-per-seed 5
 """
 
 import argparse

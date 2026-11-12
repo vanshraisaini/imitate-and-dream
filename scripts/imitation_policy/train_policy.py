@@ -10,7 +10,7 @@ import wandb
 from torch.utils.data import DataLoader, Subset
 from tqdm import tqdm
 
-from scripts.dataset import RoboMimicDataset  # your dataset.py
+from scripts.datasets.robomimic_dataset import RoboMimicDataset  # your dataset.py
 from models.imitation_policy.policy import FlowMatchingPolicy
 
 

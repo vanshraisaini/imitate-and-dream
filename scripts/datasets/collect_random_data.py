@@ -1,6 +1,6 @@
 """Collect episode-based random-action transitions from robosuite.
 
-Run with ``python -m scripts.collect_random_data --help``. Simulator imports are
+Run with ``python -m scripts.datasets.collect_random_data --help``. Simulator imports are
 delayed so configuration, storage, and alignment can be tested without OpenGL.
 """
 import argparse

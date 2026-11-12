@@ -34,7 +34,7 @@ Dataset files are ignored by Git.
 
 ## Random-action data
 
-Use `python -m scripts.collect_random_data` to collect transitions from the same
+Use `python -m scripts.datasets.collect_random_data` to collect transitions from the same
 environment as a demonstration file, or from a JSON environment config. See
 [random collection instructions](../docs/random-data-collection.md). Keep random
 data in a separate file from expert demonstrations: it is intended as additional

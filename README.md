@@ -51,7 +51,7 @@ development and experimentation.
 
 ```bash
 conda activate imitate-and-dream
-python -m scripts.collect_random_data \
+python -m scripts.datasets.collect_random_data \
   --reference-dataset datasets/square_image_v15.hdf5 \
   --output datasets/random/square_random.hdf5 \
   --episodes 10 --steps-per-episode 400 --seed 42
