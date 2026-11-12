@@ -10,7 +10,7 @@ per-dimension `action_spec`. No learned policy or training process is involved.
 From the repository root:
 
 ```bash
-conda activate imitate-and-dream
+source robosuite-venv/bin/activate
 python -m scripts.datasets.collect_random_data \
   --reference-dataset datasets/square_image_v15.hdf5 \
   --output datasets/random/square_random.hdf5 \

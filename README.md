@@ -1,62 +1,55 @@
-# Robot Learning with Imitation Learning and World Models
+# Imitate and Dream
 
-This project explores modern robot learning for manipulation using
-imitation learning and world models. It uses robotic demonstration datasets to learn generative
-policies from visual observations and proprioceptive states, with the
-goal of predicting chunks of future actions.
+**Uncertainty-aware ranking for world-model-guided generative robot policies.**
 
-## Setup
+A flow-matching policy trained on demonstrations proposes several candidate action chunks.
+A cheap latent world model imagines each one and scores it, and its own uncertainty decides
+how much to trust that score. Candidates are ranked over an ensemble of
+latent dynamics models. The policy itself is never retrained.
 
-### Local Conda environment (Linux / NVIDIA)
+Experiments use robosuite (Franka Panda) with robomimic image demonstrations on **Lift** and
+**Square** (nut assembly).
 
-```bash
-conda env create -f environment.yml
-conda activate imitate-and-dream
+## Architecture
+
+![Architecture: the frozen policy proposes K action chunks, the encoder maps the observation to a latent z, an ensemble of latent dynamics models imagines each chunk, the progress head scores the imagined latents, and candidates are ranked by μ − λσ with a fallback to the default sample.](assets/architecture.svg)
+
+| Component | What it is | Status |
+|---|---|---|
+| **Flow-matching policy** | A small ViT per camera plus a proprio MLP condition an action transformer that predicts a chunk of 16 actions with flow matching. | Trained on Lift and Square |
+| **Encoder** | Frozen DINOv2 patch tokens from both cameras plus a proprio token are fused by a transformer into one 256-D latent `z`. It is trained with an auxiliary privileged-state head and a progress head, on demonstrations and random-action data. | Trained on Square |
+| **Progress head** | `g(z) ∈ [0, 1]`: task progress (`t / T` on demonstrations, 0 on random-action data). It scores imagined states. | Trained with the encoder |
+| **Latent dynamics ensemble** | M residual MLPs that roll `z` forward under a candidate action chunk. Their disagreement is the uncertainty `σ`. | In progress |
+| **Ranking** | Sample K chunks, imagine each with every ensemble member, score with `μ − λσ`, and fall back to the default sample when `σ` exceeds a threshold. | Planned |
+
+## Results so far
+
+Rollouts of the trained flow-matching policy (agent view | wrist view).
+
+| Lift | Square (nut assembly) |
+|---|---|
+| [![Lift rollout](assets/lift.gif)](assets/lift.gif) | [![Square rollout](assets/square_nut_assembly.gif)](assets/square_nut_assembly.gif) |
+
+## Documentation
+
+- [Local setup](docs/local-setup.md): virtual environment, rendering, and preparing the demonstration datasets
+- [Train the flow-matching policy](docs/train-flow-policy.md): training, metrics, and evaluating in simulation
+- [Train the world-model encoder](docs/train-wm-encoder.md): data, losses, and which metrics to watch
+- [Random-action data collection](docs/random-data-collection.md): collector usage and the HDF5 layout
+- [Random-data validation](docs/random-data-validation.md): simulator checks for the collected data
+- [Datasets](datasets/README.md): where the datasets come from and how they are prepared
+
+## Repository layout
+
 ```
-
-This configures headless EGL rendering and installs the local dependency set.
-Docker is optional for local development. Dataset download, image conversion,
-and verification instructions are in [local setup instructions](docs/local-setup.md).
-The Square dataset preparation commands produce `datasets/square_image_v15.hdf5`.
-
-### Original virtualenv setup
-
-#### 1. Create a virtual environment
-
-``` bash
-python3 -m venv .venv
-source .venv/bin/activate
+models/
+  imitation_policy/   flow-matching policy (ViT encoders, action transformer)
+  world_model/        latent encoder, fusion transformer, aux and progress heads
+  common/             shared parts (frozen DINOv2 tokenizer, random-shift augmentation)
+scripts/
+  datasets/           dataset classes and the random-action collector
+  imitation_policy/   policy training, rollouts, pass@K oracle
+  world_model/        encoder training
+docs/                 setup and training guides
+nautilus/             cluster job for policy training
 ```
-
-#### 2. Install dependencies
-
-``` bash
-pip install --upgrade pip
-pip install -r requirements.txt
-```
-
-## Test the Setup
-
-Run the random actions script to verify that the environment and
-simulator are working correctly:
-
-``` bash
-python scripts/random_action.py
-```
-
-If the script runs successfully, your environment is ready for further
-development and experimentation.
-
-## Random-action dataset collection
-
-```bash
-conda activate imitate-and-dream
-python -m scripts.datasets.collect_random_data \
-  --reference-dataset datasets/square_image_v15.hdf5 \
-  --output datasets/random/square_random.hdf5 \
-  --episodes 10 --steps-per-episode 400 --seed 42
-```
-
-The collector saves both camera views and proprioception before and after each
-bounded random action. See [collection instructions](docs/random-data-collection.md)
-for other environments, the HDF5 schema, and output protection.
