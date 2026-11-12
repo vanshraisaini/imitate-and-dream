@@ -10,3 +10,5 @@ datasets/**/*.part
 /artifacts/
 .pytest_cache/
 results/
+**.pdf
+wandb/

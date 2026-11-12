@@ -18,6 +18,10 @@ import numpy as np
 
 CAMERAS = ("agentview", "robot0_eye_in_hand")
 PROPRIO_KEYS = ("robot0_eef_pos", "robot0_eef_quat", "robot0_gripper_qpos")
+# Privileged state for the auxiliary head, as {saved name: robosuite observation key}.
+# robomimic datasets store robosuite's "object-state" under "object"; we match that.
+STATE_KEYS = {"object": "object-state", "robot0_eef_pos": "robot0_eef_pos",
+              "robot0_eef_quat": "robot0_eef_quat"}
 
 
 def positive_int(value):
@@ -89,19 +93,34 @@ def resolve_config(args):
         return value
 
     kwargs.update(has_renderer=args.render, has_offscreen_renderer=True, use_camera_obs=True,
+                  use_object_obs=True,
                   camera_names=list(args.camera_names), camera_depths=False,
                   camera_heights=dimension(args.image_height, "camera_heights", 0),
                   camera_widths=dimension(args.image_width, "camera_widths", 1), seed=args.seed)
     return metadata, kwargs, {"path": str(source.resolve()), "sha256": sha256(source), "env_args": metadata}
 
 
-def snapshot(obs, image_keys, proprio_keys, image_shape):
-    """Copy observations before stepping: simulators may reuse array storage."""
+def low_dim_sources(proprio_keys, state_keys):
+    """{saved name: env key} for every vector observation; proprio keys are saved as-is."""
+    sources = {key: key for key in proprio_keys}
+    for name, source in (state_keys or {}).items():
+        if sources.setdefault(name, source) != source:
+            raise ValueError(f"Saved key {name!r} maps to both {sources[name]!r} and {source!r}")
+    return sources
+
+
+def snapshot(obs, image_keys, low_dim_keys, image_shape):
+    """Copy observations before stepping: simulators may reuse array storage.
+
+    low_dim_keys is {saved name: env key}; a plain sequence saves each key under its own name.
+    """
+    if not isinstance(low_dim_keys, dict):
+        low_dim_keys = {key: key for key in low_dim_keys}
     result = {}
-    for key in (*image_keys, *proprio_keys):
-        if key not in obs:
-            raise ValueError(f"Environment is missing required observation {key!r}")
-        value = np.array(obs[key], copy=True)
+    for key, source in (*((k, k) for k in image_keys), *low_dim_keys.items()):
+        if source not in obs:
+            raise ValueError(f"Environment is missing required observation {source!r}")
+        value = np.array(obs[source], copy=True)
         if key in image_keys:
             if value.shape != image_shape or value.dtype != np.uint8:
                 raise ValueError(f"{key}: expected uint8 RGB {image_shape}, got {value.dtype} {value.shape}")
@@ -112,8 +131,10 @@ def snapshot(obs, image_keys, proprio_keys, image_shape):
 
 
 def collect(env, output, *, episodes, steps_per_episode, seed, image_keys,
-            proprio_keys, image_shape, env_args, provenance, render=False):
+            proprio_keys, image_shape, env_args, provenance, render=False, state_keys=None):
     """Write bounded per-episode buffers; publish only a complete, closed HDF5.
+
+    state_keys ({saved name: env key}) adds privileged vector observations, e.g. STATE_KEYS.
 
     The caller owns the environment. Interrupted runs retain an incomplete .part
     file containing any fully written episodes; neither output nor .part is reused.
@@ -128,6 +149,7 @@ def collect(env, output, *, episodes, steps_per_episode, seed, image_keys,
     low, high = (np.asarray(x, dtype=np.float64) for x in env.action_spec)
     if low.ndim != 1 or low.size == 0 or low.shape != high.shape or not np.isfinite([low, high]).all() or np.any(low > high):
         raise ValueError("Expected finite, ordered per-dimension action bounds")
+    low_dim_keys = low_dim_sources(proprio_keys, state_keys)
     rng = np.random.default_rng(seed)
     with h5py.File(partial, "x") as f:
         f.attrs["collection_complete"] = False
@@ -135,7 +157,8 @@ def collect(env, output, *, episodes, steps_per_episode, seed, image_keys,
         f.attrs["collection_config"] = json.dumps({
             "sampler": "independent_uniform", "seed": seed, "episodes": episodes,
             "steps_per_episode": steps_per_episode, "image_keys": list(image_keys),
-            "proprio_keys": list(proprio_keys), "image_convention": "opencv", "color_order": "RGB",
+            "proprio_keys": list(proprio_keys), "state_keys": dict(state_keys or {}),
+            "image_convention": "opencv", "color_order": "RGB",
             "action_low": low.tolist(), "action_high": high.tolist(),
             "created_at": datetime.now(timezone.utc).isoformat(), **provenance,
         })
@@ -143,13 +166,13 @@ def collect(env, output, *, episodes, steps_per_episode, seed, image_keys,
         data.attrs["env_args"] = json.dumps(env_args)
         data.attrs["total"] = 0
         for episode in range(episodes):
-            current = snapshot(env.reset(), image_keys, proprio_keys, image_shape)
+            current = snapshot(env.reset(), image_keys, low_dim_keys, image_shape)
             rows = []
             for step in range(steps_per_episode):
                 action = rng.uniform(low, high)
                 # Preserve the sampled action even if an environment mutates its input.
                 following, reward, done, _ = env.step(action.copy())
-                following = snapshot(following, image_keys, proprio_keys, image_shape)
+                following = snapshot(following, image_keys, low_dim_keys, image_shape)
                 if not np.isfinite(reward):
                     raise ValueError("Environment returned a non-finite reward")
                 truncated = step + 1 == steps_per_episode and not done
@@ -162,7 +185,7 @@ def collect(env, output, *, episodes, steps_per_episode, seed, image_keys,
             group = data.create_group(f"demo_{episode}")
             for index, name in ((0, "obs"), (2, "next_obs")):
                 obs_group = group.create_group(name)
-                for key in (*image_keys, *proprio_keys):
+                for key in (*image_keys, *low_dim_keys):
                     obs_group.create_dataset(key, data=np.stack([row[index][key] for row in rows]), compression="gzip")
             group.create_dataset("actions", data=np.stack([row[1] for row in rows]))
             group.create_dataset("rewards", data=[row[3] for row in rows])
@@ -203,7 +226,7 @@ def main(argv=None):
         output = collect(
             env, args.output, episodes=args.episodes, steps_per_episode=args.steps_per_episode,
             seed=args.seed, image_keys=tuple(f"{name}_image" for name in args.camera_names),
-            proprio_keys=tuple(args.proprio_keys),
+            proprio_keys=tuple(args.proprio_keys), state_keys=STATE_KEYS,
             image_shape=(kwargs["camera_heights"], kwargs["camera_widths"], 3),
             env_args={"env_name": metadata["env_name"], "type": 1,
                       "env_version": suite.__version__, "env_kwargs": kwargs},
