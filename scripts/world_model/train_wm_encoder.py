@@ -144,7 +144,7 @@ def parse_args():
     ap.add_argument("--dropout", type=float, default=0.0)
     ap.add_argument("--head_hidden", type=int, default=256)
     # checkpoints / logging
-    ap.add_argument("--out", type=str, default="encoder/wm_encoder.pt")
+    ap.add_argument("--out", type=str, default="checkpoints/world_model_encoder/wm_encoder.pt")
     ap.add_argument("--save_every", type=int, default=5)
     ap.add_argument("--eval_every", type=int, default=1)
     ap.add_argument("--wandb_project", type=str, default="world-model-encoder")

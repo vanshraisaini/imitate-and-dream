@@ -75,7 +75,7 @@ def parse_args():
     ap.add_argument("--ema_decay", type=float, default=0.995)
     ap.add_argument("--workers", type=int, default=0, help="raise only if your dataset is worker-safe (no open h5py handle)")
     ap.add_argument("--save_every", type=int, default=10)
-    ap.add_argument("--out", type=str, default="policy/policy.pt")
+    ap.add_argument("--out", type=str, default="checkpoints/imitation_policy/policy.pt")
     # evaluation
     ap.add_argument("--val_frac", type=float, default=0.05, help="fraction of samples held out for eval (0 disables)")
     ap.add_argument("--eval_every", type=int, default=5, help="evaluate every N epochs")
