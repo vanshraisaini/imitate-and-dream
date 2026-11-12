@@ -19,7 +19,7 @@ MuJoCo 3.3.1, PyTorch 2.9.1+cu128, and an RTX 5070 Ti Laptop GPU.
 ## Initial training-data batch
 
 ```bash
-python -m scripts.collect_random_data \
+python -m scripts.datasets.collect_random_data \
   --reference-dataset datasets/square_image_v15.hdf5 \
   --output datasets/random/square_random_10x400_seed42.hdf5 \
   --episodes 10 --steps-per-episode 400 --seed 42

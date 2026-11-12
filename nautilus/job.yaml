@@ -32,7 +32,7 @@ spec:
             - bash
             - -c
             - |
-              git stash && git pull origin main && python3 -m scripts.train_policy \
+              git stash && git pull origin main && python3 -m scripts.imitation_policy.train_policy \
                 --dataset=./datasets/square_image_v15.hdf5 \
                 --epochs=3000 \
                 --batch_size=64 \

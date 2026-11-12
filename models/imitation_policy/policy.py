@@ -2,7 +2,7 @@ import torch
 import torch.nn as nn
 
 from models.imitation_policy.action_transformer import ActionTransformer
-from models.imitation_policy.augment import random_shift
+from models.common.augment import random_shift
 from models.imitation_policy.proprio_encoder import ProprioEncoder
 from models.imitation_policy.vit_encoder import ViTEncoder
 

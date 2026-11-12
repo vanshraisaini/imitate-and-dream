@@ -10,8 +10,8 @@ per-dimension `action_spec`. No learned policy or training process is involved.
 From the repository root:
 
 ```bash
-conda activate imitate-and-dream
-python -m scripts.collect_random_data \
+source robosuite-venv/bin/activate
+python -m scripts.datasets.collect_random_data \
   --reference-dataset datasets/square_image_v15.hdf5 \
   --output datasets/random/square_random.hdf5 \
   --episodes 10 --steps-per-episode 400 --seed 42
@@ -31,7 +31,7 @@ demonstration HDF5 also works when it contains `data.attrs['env_args']`.
 ## Select a different environment
 
 ```bash
-python -m scripts.collect_random_data \
+python -m scripts.datasets.collect_random_data \
   --env-config configs/collection/lift.json \
   --output datasets/random/lift_random.hdf5 \
   --episodes 10 --steps-per-episode 400 --seed 42

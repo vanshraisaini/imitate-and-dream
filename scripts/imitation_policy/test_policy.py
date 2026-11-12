@@ -15,7 +15,7 @@ from models.imitation_policy.policy import FlowMatchingPolicy
 # (robomimic uses the OpenCV convention). This MUST be set before the environment is created.
 macros.IMAGE_CONVENTION = "opencv"
 
-CHECKPOINT_NAME = "checkpoints/nutAssemblyPolicy_3000_epoch.pt"
+CHECKPOINT_NAME = "checkpoints/imitation_policy/nutAssemblyPolicy_3000_epoch.pt"
 DATASET_PATH = "./datasets/square_image_v15.hdf5"  # env settings + reference frames; set to None to skip
 DEBUG_DIR = "debug"
 RENDER_GUI = True

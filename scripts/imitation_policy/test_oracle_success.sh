@@ -2,11 +2,11 @@
 # Run the pass@K oracle diagnostic sharded over several worker processes, then analyze.
 #
 # Usage (from the project root):
-#   ./scripts/test_oracle_success.sh [NUM_WORKERS=4] [NUM_SEEDS=100] [RUNS_PER_SEED=10]
+#   ./scripts/imitation_policy/test_oracle_success.sh [NUM_WORKERS=4] [NUM_SEEDS=100] [RUNS_PER_SEED=10]
 #
 # Examples:
-#   ./scripts/test_oracle_success.sh 4            # 4 workers, 100 seeds, 10 runs per seed
-#   ./scripts/test_oracle_success.sh 8 100 20     # 8 workers, 100 seeds, 20 runs per seed
+#   ./scripts/imitation_policy/test_oracle_success.sh 4            # 4 workers, 100 seeds, 10 runs per seed
+#   ./scripts/imitation_policy/test_oracle_success.sh 8 100 20     # 8 workers, 100 seeds, 20 runs per seed
 
 set -u
 
@@ -42,7 +42,7 @@ pids=()
 trap 'echo "Interrupted, stopping workers..." >&2; kill "${pids[@]}" 2>/dev/null; exit 130' INT TERM
 
 for ((w = 0; w < NUM_WORKERS; w++)); do
-    OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 python -m scripts.test_oracle_success run \
+    OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 python -m scripts.imitation_policy.test_oracle_success run \
         --worker "$w" --num-workers "$NUM_WORKERS" \
         --num-seeds "$NUM_SEEDS" --runs-per-seed "$RUNS_PER_SEED" &
     pids+=($!)
@@ -58,4 +58,4 @@ if (( failed )); then
     exit 1
 fi
 
-python -m scripts.test_oracle_success analyze
+python -m scripts.imitation_policy.test_oracle_success analyze
