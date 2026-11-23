@@ -37,14 +37,10 @@ def load_model(checkpoint_path):
         map_location=DEVICE,
         weights_only=False
     )
-
-    # Reconstruct architecture using saved training configuration
     config = checkpoint["config"]
 
-    model = FlowMatchingPolicy(**config)
-
-    # Load EMA weights (recommended for evaluation)
-    model.load_state_dict(checkpoint["ema"])
+    # Reconstruct the architecture from the saved config and load the EMA weights
+    model = FlowMatchingPolicy.from_checkpoint(checkpoint)
 
     model.to(DEVICE)
     model.eval()

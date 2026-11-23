@@ -56,9 +56,7 @@ RENDER_GUI = False          # True: open the viewer and watch each run. Results 
 
 
 def load_model(path):
-    ckpt = torch.load(path, map_location=DEVICE, weights_only=False)
-    model = FlowMatchingPolicy(**ckpt["config"])
-    model.load_state_dict(ckpt["ema"])
+    model = FlowMatchingPolicy.from_checkpoint(path, map_location=DEVICE)
     model.to(DEVICE).eval()
     return model
 

@@ -16,7 +16,7 @@ Experiments use robosuite (Franka Panda) with robomimic image demonstrations on 
 
 | Component | What it is | Status |
 |---|---|---|
-| **Flow-matching policy** | A small ViT per camera plus a proprio MLP condition an action transformer that predicts a chunk of 16 actions with flow matching. | Trained on Lift and Square |
+| **Flow-matching policy** | A pretrained DINOv2 (configurable; a small from-scratch ViT per camera is the alternative) plus a proprio MLP condition an action transformer that predicts a chunk of 16 actions with flow matching. | Trained on Lift and Square |
 | **Encoder** | Frozen DINOv2 patch tokens from both cameras plus a proprio token are fused by a transformer into one 256-D latent `z`. It is trained with an auxiliary privileged-state head and a progress head, on demonstrations and random-action data. | Trained on Square |
 | **Progress head** | `g(z) ∈ [0, 1]`: task progress (`t / T` on demonstrations, 0 on random-action data). It scores imagined states. | Trained with the encoder |
 | **Latent dynamics ensemble** | M residual MLPs that roll `z` forward under a candidate action chunk. Their disagreement is the uncertainty `σ`. | In progress |
@@ -43,9 +43,9 @@ Rollouts of the trained flow-matching policy (agent view | wrist view).
 
 ```
 models/
-  imitation_policy/   flow-matching policy (ViT encoders, action transformer)
+  imitation_policy/   flow-matching policy (vision encoder choice, action transformer)
   world_model/        latent encoder, fusion transformer, aux and progress heads
-  common/             shared parts (frozen DINOv2 tokenizer, random-shift augmentation)
+  common/             shared parts (DINOv2 tokenizer, proprio encoder, random-shift augmentation)
 scripts/
   datasets/           dataset classes and the random-action collector
   imitation_policy/   policy training, rollouts, pass@K oracle

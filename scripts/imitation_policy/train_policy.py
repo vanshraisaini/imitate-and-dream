@@ -11,7 +11,7 @@ from torch.utils.data import DataLoader, Subset
 from tqdm import tqdm
 
 from scripts.datasets.robomimic_dataset import RoboMimicDataset  # your dataset.py
-from models.imitation_policy.policy import FlowMatchingPolicy
+from models.imitation_policy.policy import VISION_ENCODERS, FlowMatchingPolicy
 
 
 # ------------------------------------------------------------------ helpers
@@ -25,7 +25,8 @@ def to_device(x, device):
 @torch.no_grad()
 def ema_update(ema, model, decay):
     for pe, p in zip(ema.parameters(), model.parameters()):
-        pe.lerp_(p, 1.0 - decay)
+        if p.requires_grad:  # frozen weights (e.g. DINOv2) never change
+            pe.lerp_(p, 1.0 - decay)
     for be, b in zip(ema.buffers(), model.buffers()):
         be.copy_(b)
 
@@ -76,6 +77,13 @@ def parse_args():
     ap.add_argument("--workers", type=int, default=0, help="raise only if your dataset is worker-safe (no open h5py handle)")
     ap.add_argument("--save_every", type=int, default=10)
     ap.add_argument("--out", type=str, default="checkpoints/imitation_policy/policy.pt")
+    # vision encoder
+    ap.add_argument("--vision_encoder", type=str, default="dinov2", choices=VISION_ENCODERS,
+                    help="dinov2: pretrained DINOv2 shared by both cameras; vit: small ViT per camera from scratch")
+    ap.add_argument("--dino_model", type=str, default="dinov2_vits14", help="torch.hub DINOv2 name")
+    ap.add_argument("--dino_image_size", type=int, default=84, help="DINOv2 input size (multiple of 14)")
+    ap.add_argument("--finetune_dino", action="store_true", help="train DINOv2 too (frozen by default)")
+    ap.add_argument("--dino_lr", type=float, default=1e-5, help="learning rate for DINOv2 when --finetune_dino")
     # evaluation
     ap.add_argument("--val_frac", type=float, default=0.05, help="fraction of samples held out for eval (0 disables)")
     ap.add_argument("--eval_every", type=int, default=5, help="evaluate every N epochs")
@@ -106,14 +114,29 @@ def build_dataloaders(args, device):
     return ds, train_loader, val_loader
 
 
-def model_config(sample):
+def model_config(sample, args):
     """Infer model sizes from one dataset sample so the model always matches the data."""
-    return dict(
+    cfg = dict(
         img_size=sample["observation"]["agent_image"].shape[-1],
         proprio_dim=sample["observation"]["proprio"].shape[-1],
         action_dim=sample["action_chunk"].shape[-1],
         horizon=sample["action_chunk"].shape[0],
+        vision_encoder=args.vision_encoder,
     )
+    if args.vision_encoder == "dinov2":
+        cfg.update(dino_model=args.dino_model, dino_image_size=args.dino_image_size,
+                   freeze_dino=not args.finetune_dino)
+    return cfg
+
+
+def param_groups(policy, args):
+    """Trainable parameters; a fine-tuned DINOv2 gets its own (lower) learning rate."""
+    dino = [p for n, p in policy.named_parameters() if p.requires_grad and n.startswith("dino.")]
+    rest = [p for n, p in policy.named_parameters() if p.requires_grad and not n.startswith("dino.")]
+    groups = [{"params": rest, "lr": args.lr}]
+    if dino:
+        groups.append({"params": dino, "lr": args.dino_lr})
+    return groups
 
 
 def make_scheduler(opt, warmup_steps, total_steps):
@@ -139,8 +162,10 @@ def init_wandb(args, config):
     # upload the exact code: policy.py + the model files next to it + this script
     code = wandb.Artifact("policy-code", type="code")
     policy_dir = os.path.dirname(inspect.getsourcefile(FlowMatchingPolicy))
-    for path in sorted(glob.glob(os.path.join(policy_dir, "*.py"))):
-        code.add_file(path, name=os.path.basename(path))
+    common_dir = os.path.join(os.path.dirname(policy_dir), "common")
+    for d in (policy_dir, common_dir):
+        for path in sorted(glob.glob(os.path.join(d, "*.py"))):
+            code.add_file(path, name=f"{os.path.basename(d)}/{os.path.basename(path)}")
     code.add_file(os.path.abspath(__file__), name="train.py")
     run.log_artifact(code)
     return run
@@ -155,7 +180,7 @@ class Trainer:
 
         self.ema = copy.deepcopy(policy).eval().requires_grad_(False)
         self.opt = torch.optim.AdamW(
-            policy.parameters(), lr=args.lr, betas=(0.9, 0.95), weight_decay=args.weight_decay
+            param_groups(policy, args), betas=(0.9, 0.95), weight_decay=args.weight_decay
         )
         self.sched = make_scheduler(self.opt, args.warmup_steps, args.epochs * len(train_loader))
 
@@ -175,7 +200,8 @@ class Trainer:
             loss = self.policy.loss(batch)
             self.opt.zero_grad(set_to_none=True)
             loss.backward()
-            grad_norm = torch.nn.utils.clip_grad_norm_(self.policy.parameters(), 1.0)
+            grad_norm = torch.nn.utils.clip_grad_norm_(
+                [p for p in self.policy.parameters() if p.requires_grad], 1.0)
             self.opt.step()
             self.sched.step()
             ema_update(self.ema, self.policy, args.ema_decay)
@@ -253,15 +279,16 @@ def main():
     os.makedirs(os.path.dirname(args.out) or ".", exist_ok=True)
 
     ds, train_loader, val_loader = build_dataloaders(args, device)
-    cfg = model_config(ds[0])
+    cfg = model_config(ds[0], args)
     policy = FlowMatchingPolicy(**cfg).to(device)
 
     n_params = sum(p.numel() for p in policy.parameters())
+    n_trainable = sum(p.numel() for p in policy.parameters() if p.requires_grad)
     n_val = len(val_loader.dataset) if val_loader is not None else 0
     n_train = len(train_loader.dataset)
-    print(f"{n_train} train / {n_val} val samples, {n_params / 1e6:.2f}M parameters, device={device}")
+    print(f"{n_train} train / {n_val} val samples, {n_params / 1e6:.2f}M parameters ({n_trainable / 1e6:.2f}M trainable), device={device}")
 
-    run = init_wandb(args, {**cfg, "n_params": n_params, "train_samples": n_train, "val_samples": n_val})
+    run = init_wandb(args, {**cfg, "n_params": n_params, "n_trainable_params": n_trainable, "train_samples": n_train, "val_samples": n_val})
     Trainer(args, policy, cfg, train_loader, val_loader, device, run).fit()
     wandb.finish()
 

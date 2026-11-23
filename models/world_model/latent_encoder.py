@@ -5,7 +5,7 @@ import torch.nn as nn
 
 from models.common.dinov2_encoder import DINOv2Tokenizer
 from models.world_model.fusion_transformer import FusionTransformer
-from models.world_model.proprio_encoder import ProprioEncoder
+from models.common.proprio_encoder import ProprioEncoder
 
 
 @dataclass

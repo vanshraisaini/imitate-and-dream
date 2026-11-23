@@ -199,8 +199,7 @@ def main(argv=None):
     macros.IMAGE_CONVENTION = "opencv"  # dataset images are upright
     device = torch.device(args.device or ("cuda" if torch.cuda.is_available() else "cpu"))
     ckpt = torch.load(args.checkpoint, map_location=device, weights_only=False)
-    policy = FlowMatchingPolicy(**ckpt["config"])
-    policy.load_state_dict(ckpt["ema"])
+    policy = FlowMatchingPolicy.from_checkpoint(ckpt)
     policy.to(device).eval()
 
     agent_key, wrist_key = (f"{name}_image" for name in args.camera_names)

@@ -28,8 +28,13 @@ These are the settings used on the cluster (`nautilus/job.yaml`). The defaults
 - **Data:** `RoboMimicDataset` (`scripts/datasets/robomimic_dataset.py`). Each sample is
   the agent-view image, the wrist image, a 9-D proprio vector (eef pos, eef quat, gripper)
   and the next 16 actions. Chunks that run past the end of a demo are zero-padded and masked.
-- **Model:** a separate small ViT for each camera, trained from scratch, plus a proprio MLP.
-  Their tokens condition a transformer that predicts the flow velocity for the action chunk.
+- **Model:** a vision encoder for the two cameras plus a proprio MLP. Their tokens condition a
+  transformer that predicts the flow velocity for the action chunk. The vision encoder is set
+  with `--vision_encoder`:
+  - `dinov2` (default): one pretrained DINOv2 (`models/common/dinov2_encoder.py`) shared by both
+    cameras, with a linear projection for each camera. DINOv2 is frozen unless
+    `--finetune_dino` is passed, which trains it with its own learning rate `--dino_lr`.
+  - `vit`: a separate small ViT for each camera, trained from scratch (the original setup).
 - **Objective:** flow matching. With t = 0 as noise and t = 1 as data, the target velocity is
   `actions - noise`. Random-shift augmentation (±4 px) is applied during training.
 - **Optimization:** AdamW, linear warmup then cosine decay, grad-norm clip 1.0. An EMA copy of
@@ -50,12 +55,18 @@ These are the settings used on the cluster (`nautilus/job.yaml`). The defaults
 | `--workers` | 0 | DataLoader workers |
 | `--val_frac` / `--eval_every` | 0.05 / 5 | Held-out fraction, eval frequency in epochs |
 | `--save_every` | 10 | Checkpoint frequency in epochs |
+| `--vision_encoder` | `dinov2` | `dinov2` (pretrained) or `vit` (from scratch) |
+| `--dino_model` | `dinov2_vits14` | torch.hub DINOv2 variant |
+| `--dino_image_size` | 84 | DINOv2 input size, a multiple of 14 (84 gives 6x6 = 36 tokens per camera) |
+| `--finetune_dino` / `--dino_lr` | off / 1e-5 | Fine-tune DINOv2 instead of freezing it |
 | `--out` | `checkpoints/imitation_policy/policy.pt` | Checkpoint path |
 | `--wandb_mode` | `online` | `offline` or `disabled` to skip uploading |
 
 ## Outputs
 
-- `--out`: the latest checkpoint, `{policy, ema, config, epoch}`.
+- `--out`: the latest checkpoint, `{policy, ema, config, epoch}`. Load it with
+  `FlowMatchingPolicy.from_checkpoint(path)`. Checkpoints saved before the DINOv2 option
+  have no `vision_encoder` in their config and load as `vit`.
 - `<out>_best.pt`: the best checkpoint by `val/action_mse`.
 - wandb project `flow-matching-policy`: metrics, a code snapshot, and both checkpoints as a
   model artifact.

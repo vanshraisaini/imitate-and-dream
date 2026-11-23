@@ -5,6 +5,8 @@ class ProprioEncoder(nn.Module):
     """
     MLP mapping proprioception (B, proprio_dim) to a single token (B, d_model).
     Expects already-normalized proprio (the dataset normalizes it).
+
+    Shared by the flow-matching policy and the world-model encoder.
     """
 
     def __init__(self, proprio_dim=9, d_model=256, hidden_dim=256):
