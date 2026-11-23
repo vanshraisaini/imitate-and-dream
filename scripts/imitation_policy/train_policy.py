@@ -74,7 +74,7 @@ def parse_args():
     ap.add_argument("--weight_decay", type=float, default=1e-4)
     ap.add_argument("--warmup_steps", type=int, default=500)
     ap.add_argument("--ema_decay", type=float, default=0.995)
-    ap.add_argument("--workers", type=int, default=0, help="raise only if your dataset is worker-safe (no open h5py handle)")
+    ap.add_argument("--workers", type=int, default=0, help="DataLoader workers; each opens its own HDF5 handle")
     ap.add_argument("--save_every", type=int, default=10)
     ap.add_argument("--out", type=str, default="checkpoints/imitation_policy/policy.pt")
     # vision encoder
@@ -280,6 +280,7 @@ def main():
 
     ds, train_loader, val_loader = build_dataloaders(args, device)
     cfg = model_config(ds[0], args)
+    ds.close()  # ds[0] opened the HDF5 file here; workers must open their own, not inherit it via fork
     policy = FlowMatchingPolicy(**cfg).to(device)
 
     n_params = sum(p.numel() for p in policy.parameters())

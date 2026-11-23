@@ -52,7 +52,7 @@ These are the settings used on the cluster (`nautilus/job.yaml`). The defaults
 | `--lr` / `--weight_decay` | 1e-4 / 1e-4 | AdamW |
 | `--warmup_steps` | 500 | Linear LR warmup |
 | `--ema_decay` | 0.995 | EMA of the weights, used for evaluation and rollouts |
-| `--workers` | 0 | DataLoader workers |
+| `--workers` | 0 | DataLoader workers (e.g. 4 to 8; each opens its own HDF5 handle) |
 | `--val_frac` / `--eval_every` | 0.05 / 5 | Held-out fraction, eval frequency in epochs |
 | `--save_every` | 10 | Checkpoint frequency in epochs |
 | `--vision_encoder` | `dinov2` | `dinov2` (pretrained) or `vit` (from scratch) |
