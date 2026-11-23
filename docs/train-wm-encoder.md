@@ -20,6 +20,14 @@ reconstruction decoder and no EMA target.
 
   Random actions almost never move the nut, so each episode adds only one nut pose. Many
   short episodes (e.g. 1000 × 40) give more pose diversity than a few long ones.
+- Optional: rollouts of the frozen policy with success labels. They teach the progress head
+  what a near-expert *failure* looks like, which demos and random actions cannot:
+
+  ```bash
+  python -m scripts.datasets.collect_policy_data \
+      --reference-dataset datasets/square_image_v15.hdf5 \
+      --output datasets/policy/square_policy_s0.hdf5 --episodes 100 --start-seed 0
+  ```
 - DINOv2 is downloaded from `torch.hub` on first use.
 
 ## Run
@@ -30,25 +38,40 @@ From the repository root:
 python -m scripts.world_model.train_wm_encoder \
     --demo_datasets datasets/square_image_v15.hdf5 \
     --random_datasets datasets/random/square_random.hdf5 \
+    --policy_datasets datasets/policy/square_policy_s*.hdf5 \
     --epochs 30 --amp
 ```
 
-`--demo_datasets` and `--random_datasets` each accept several files. One epoch takes about a
+`--demo_datasets`, `--random_datasets` and `--policy_datasets` each accept several files;
+`--policy_datasets` can be left out. One epoch takes about a
 minute on a laptop RTX 5060.
 
 ## What it does
 
 - **Data:** `EncoderWMDataset` (`scripts/datasets/encoder_wm_dataset.py`). One item is one
   frame: both camera images (uint8), the 9-D proprio vector, a 21-D aux target, a progress
-  label and an `is_demo` flag. Low-dim data is loaded into memory; images are read from disk.
+  label, the episode kind (`demo` / `random` / `policy`), an `is_demo` flag and the episode's
+  outcome (`success`). Low-dim data is loaded into memory; images are read from disk.
 - **Labels:**
   - Aux target: nut world pose, nut pose in the gripper frame, gripper pose. It is built by
     `build_aux_targets` in `models/world_model/aux_head.py`, which recomputes the relative
     pose because robosuite's `object[0:7]` is one step stale.
-  - Progress: `t / (T - 1)` along a demo, 0 for every random-action frame.
+  - Progress (`progress_labels` in `models/world_model/progress_head.py`):
+
+    | Episode | Label |
+    |---|---|
+    | demo | `t / (T - 1)` |
+    | successful policy rollout | `min(t / t_success, 1)` |
+    | failed policy rollout | 0 |
+    | random actions | 0 |
+
+    Early frames of successful and failed rollouts look alike, so the squared loss pulls the
+    head towards P(success | state) × progress, a value-like score.
 - **Split:** `--val_frac` of the episodes of *each* source is held out. The split is stored
   in the checkpoint.
-- **Sampling:** a weighted sampler makes `--demo_frac` of every batch demo frames.
+- **Sampling:** a weighted sampler makes `--demo_frac` of every batch demo frames,
+  `--policy_frac` policy frames and the rest random-action frames. The share of a missing
+  source is redistributed over the others.
 - **Model:**
   - Frozen DINOv2 ViT-S/14 turns each 84×84 image into 36 patch tokens.
   - A fusion transformer combines the patch tokens from both cameras, a proprio token and a
@@ -66,7 +89,9 @@ minute on a laptop RTX 5060.
 |---|---|---|
 | `--demo_datasets` | `./datasets/square_image_v15.hdf5` | Demonstration files (progress t/(T-1)) |
 | `--random_datasets` | `./datasets/random/square_random.hdf5` | Random-action files (progress 0) |
+| `--policy_datasets` | none | Policy rollouts from `collect_policy_data.py` (progress by outcome) |
 | `--demo_frac` | 0.5 | Fraction of each batch drawn from demos |
+| `--policy_frac` | 0.25 | Fraction drawn from policy rollouts (rest: random) |
 | `--samples_per_epoch` | number of train frames | Frames drawn per epoch |
 | `--val_frac` / `--split_seed` | 0.05 / 0 | Held-out episode fraction per source |
 | `--epochs` / `--batch_size` / `--lr` | 30 / 64 / 3e-4 | |
@@ -102,9 +127,13 @@ enc.load_state_dict(ckpt["encoder"], strict=False)  # DINOv2 weights come from t
 | `val_demo/nut_pos_rmse_m` | ≈ 3 mm | nut position recoverable from `z` |
 | `val_demo/nut_quat_deg` | ≈ 3° | nut rotation recoverable from `z` |
 | `val/nut_rel_pos_rmse_m` | ≈ 6 mm | nut position relative to the gripper |
+| `val_policy/progress_auroc` | not measured yet | g separates frames of successful from failed rollouts (what ranking needs) |
+| `val_policy/progress_pred_mean_success` / `_failure` | | mean g on successful vs failed rollout frames |
 
-Metrics prefixed `val_demo/` and `val_random/` use only that source; `val/` uses all
-held-out frames. Two numbers look bad but are artifacts:
+Metrics prefixed `val_demo/`, `val_random/` and `val_policy/` use only that source. `val/`
+losses and aux errors use all held-out frames; `val/progress_*` uses demo and random frames
+only, so that its AUROC stays a demo-vs-random number. `val_policy/progress_auroc` needs
+held-out rollouts with both outcomes; with few policy episodes it may be missing. Two numbers look bad but are artifacts:
 
 - `val/progress_spearman` is low (≈ 0.77) because all random frames share the label 0 and
   ties are ranked arbitrarily. Use `val_demo/progress_spearman`.

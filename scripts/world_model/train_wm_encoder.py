@@ -1,19 +1,23 @@
 """
 Train the world-model encoder (fusion transformer + proprio MLP; DINOv2 frozen) with an
-auxiliary state head and a progress head, on demonstrations and random-action data together.
+auxiliary state head and a progress head, on demonstrations, random-action data and (optionally)
+policy rollouts together.
 
   z    = LatentEncoder(obs)                                   (B, 256)
   loss = lambda_aux * aux_loss(AuxHead(z), state) + lambda_prog * progress_loss(ProgressHead(z), rho)
 
-  rho = t / (T - 1) on demonstrations, 0 on random-action episodes.
+  rho = t / (T - 1) on demonstrations, min(t / t_success, 1) on successful policy rollouts,
+        0 on failed policy rollouts and on random-action episodes.
 
-Batches are balanced so that a fraction --demo_frac of frames are demonstrations.
+Batches are balanced so that a fraction --demo_frac of frames are demonstrations, --policy_frac
+are policy rollouts and the rest random-action frames.
 Validation holds out --val_frac of the episodes of each source.
 
 Example:
   python -m scripts.world_model.train_wm_encoder \
       --demo_datasets datasets/square_image_v15.hdf5 \
-      --random_datasets datasets/random/square_random.hdf5 --epochs 30 --amp
+      --random_datasets datasets/random/square_random.hdf5 \
+      --policy_datasets datasets/policy/square_policy_s*.hdf5 --epochs 30 --amp
 """
 import argparse
 import glob
@@ -32,7 +36,7 @@ from models.world_model.aux_head import eval_metrics as aux_metrics
 from models.world_model.latent_encoder import LatentEncoder, LatentEncoderConfig
 from models.world_model.progress_head import ProgressHead, progress_loss
 from models.world_model.progress_head import eval_metrics as progress_metrics
-from scripts.datasets.encoder_wm_dataset import EncoderWMDataset, Source, split_episodes
+from scripts.datasets.encoder_wm_dataset import KIND_INDEX, EncoderWMDataset, Source, split_episodes
 
 
 # ------------------------------------------------------------------ helpers
@@ -86,28 +90,39 @@ def evaluate(args, encoder, aux_head, prog_head, loader, device, amp):
     encoder.eval()
     aux_head.eval()
     prog_head.eval()
-    zs, aux_t, prog_t, demo = [], [], [], []
+    zs, aux_t, prog_t, kind, success = [], [], [], [], []
     for batch in loader:
         batch = to_device(batch, device)
         zs.append(encode(encoder, prepare_obs(batch["observation"]), amp))
         aux_t.append(batch["aux_target"])
         prog_t.append(batch["progress"])
-        demo.append(batch["is_demo"])
-    z, aux_t, prog_t, demo = torch.cat(zs), torch.cat(aux_t), torch.cat(prog_t), torch.cat(demo)
+        kind.append(batch["kind"])
+        success.append(batch["success"])
+    z, aux_t, prog_t = torch.cat(zs), torch.cat(aux_t), torch.cat(prog_t)
+    kind, success = torch.cat(kind), torch.cat(success)
+    demo, rand, policy = (kind == KIND_INDEX[k] for k in ("demo", "random", "policy"))
 
     total, logs = compute_losses(args, aux_head, prog_head, z, {"aux_target": aux_t, "progress": prog_t})
     m = {"val/loss": total.item(), **{f"val/{k}": v.item() for k, v in logs.items()}}
     m.update({f"val/{k}": v for k, v in aux_metrics(aux_head, z, aux_t).items()})
-    # demo-vs-random separation (AUROC) uses all frames
-    m.update({f"val/progress_{k}": v for k, v in progress_metrics(prog_head, z, prog_t, demo).items()})
+    # demo-vs-random separation (AUROC) uses demo and random frames
+    dr = demo | rand
+    if dr.any():
+        m.update({f"val/progress_{k}": v
+                  for k, v in progress_metrics(prog_head, z[dr], prog_t[dr], demo[dr]).items()})
     # how well g tracks progress WITHIN demonstrations (what ranking candidates relies on)
     if demo.any():
         m.update({f"val_demo/progress_{k}": v
                   for k, v in progress_metrics(prog_head, z[demo], prog_t[demo]).items()})
         m.update({f"val_demo/{k}": v for k, v in aux_metrics(aux_head, z[demo], aux_t[demo]).items()})
-    if (~demo).any():
-        m.update({f"val_random/{k}": v for k, v in aux_metrics(aux_head, z[~demo], aux_t[~demo]).items()})
-        m["val_random/progress_pred_mean"] = prog_head.predict(z[~demo]).mean().item()
+    if rand.any():
+        m.update({f"val_random/{k}": v for k, v in aux_metrics(aux_head, z[rand], aux_t[rand]).items()})
+        m["val_random/progress_pred_mean"] = prog_head.predict(z[rand]).mean().item()
+    # policy rollouts: does g separate frames of successful from failed rollouts? (what ranking needs)
+    if policy.any():
+        m.update({f"val_policy/progress_{k}": v
+                  for k, v in progress_metrics(prog_head, z[policy], prog_t[policy], success[policy]).items()})
+        m.update({f"val_policy/{k}": v for k, v in aux_metrics(aux_head, z[policy], aux_t[policy]).items()})
     return m
 
 
@@ -117,11 +132,16 @@ def parse_args():
     # data
     ap.add_argument("--demo_datasets", nargs="+", default=["./datasets/square_image_v15.hdf5"])
     ap.add_argument("--random_datasets", nargs="*", default=["./datasets/random/square_random.hdf5"])
+    ap.add_argument("--policy_datasets", nargs="*", default=[],
+                    help="policy rollouts from collect_policy_data.py (progress by episode success)")
     ap.add_argument("--demo_frac", type=float, default=0.5,
                     help="fraction of each epoch's frames drawn from demonstrations")
+    ap.add_argument("--policy_frac", type=float, default=0.25,
+                    help="fraction drawn from policy rollouts (the rest is random-action data); "
+                         "fractions of missing sources are redistributed over the others")
     ap.add_argument("--samples_per_epoch", type=int, default=None,
                     help="frames drawn per epoch (default: number of training frames)")
-    ap.add_argument("--val_frac", type=float, default=0.05, help="fraction of episodes held out per source")
+    ap.add_argument("--val_frac", type=float, default=0.15, help="fraction of episodes held out per source")
     ap.add_argument("--split_seed", type=int, default=0)
     ap.add_argument("--workers", type=int, default=4)
     # optimization
@@ -156,13 +176,15 @@ def parse_args():
 
 
 def build_data(args, device):
-    sources = [Source(p, True) for p in args.demo_datasets] + [Source(p, False) for p in args.random_datasets]
+    sources = ([Source(p, "demo") for p in args.demo_datasets]
+               + [Source(p, "random") for p in args.random_datasets]
+               + [Source(p, "policy") for p in args.policy_datasets])
     train_eps, val_eps = split_episodes(sources, args.val_frac, args.split_seed)
     train_ds = EncoderWMDataset(sources, train_eps)
     val_ds = EncoderWMDataset(sources, val_eps) if args.val_frac > 0 else None
 
     n_samples = args.samples_per_epoch or len(train_ds)
-    sampler = WeightedRandomSampler(train_ds.sample_weights(args.demo_frac), n_samples, replacement=True)
+    sampler = WeightedRandomSampler(train_ds.sample_weights(args.demo_frac, args.policy_frac), n_samples, replacement=True)
     kwargs = dict(batch_size=args.batch_size, num_workers=args.workers, pin_memory=device == "cuda",
                   persistent_workers=args.workers > 0)
     train_loader = DataLoader(train_ds, sampler=sampler, drop_last=True, **kwargs)
@@ -228,7 +250,8 @@ class Trainer:
                 self.log({
                     "train/loss": loss.item(),
                     **{f"train/{k}": v.item() for k, v in logs.items()},
-                    "train/demo_frac_batch": batch["is_demo"].float().mean().item(),
+                    **{f"train/{k}_frac_batch": (batch["kind"] == i).float().mean().item()
+                       for k, i in KIND_INDEX.items()},
                     "train/grad_norm": grad_norm.item(),
                     "train/lr": self.sched.get_last_lr()[0],
                     "epoch": epoch,
@@ -245,6 +268,8 @@ class Trainer:
             line += f" | demo spearman {m['val_demo/progress_spearman']:.3f}"
         if "val/progress_auroc" in m:
             line += f" | demo-vs-random AUROC {m['val/progress_auroc']:.3f}"
+        if "val_policy/progress_auroc" in m:
+            line += f" | rollout success-vs-fail AUROC {m['val_policy/progress_auroc']:.3f}"
         print(line)
         self.log({**m, "epoch": epoch})
         if m["val/loss"] < self.best_loss:
@@ -322,17 +347,21 @@ def main():
     # z-score aux position targets using TRAIN frames only (quaternion dims are left alone)
     aux_head.fit_stats(train_ds.aux_targets.to(device))
 
-    n_train_demo = int(train_ds.is_demo.sum())
+    counts = train_ds.kind_counts()
     n_val = len(val_ds) if val_ds is not None else 0
     n_enc = sum(p.numel() for p in encoder.trainable_parameters())
     n_heads = sum(p.numel() for m in (aux_head, prog_head) for p in m.parameters())
-    print(f"train: {len(train_ds)} frames ({n_train_demo} demo / {len(train_ds) - n_train_demo} random), "
-          f"val: {n_val} frames | {len(train_loader)} steps/epoch at demo_frac={args.demo_frac} | "
+    n_policy_eps = sum(len(v) for s, v in zip(train_ds.sources, train_ds.episode_success) if s.kind == "policy")
+    n_policy_ok = sum(sum(v) for s, v in zip(train_ds.sources, train_ds.episode_success) if s.kind == "policy")
+    print(f"train: {len(train_ds)} frames {counts}"
+          + (f" ({n_policy_ok}/{n_policy_eps} policy episodes successful)" if n_policy_eps else "")
+          + f", val: {n_val} frames | {len(train_loader)} steps/epoch at demo_frac={args.demo_frac}, "
+          f"policy_frac={args.policy_frac} | "
           f"trainable: encoder {n_enc / 1e6:.2f}M, heads {n_heads / 1e6:.2f}M | device={device}")
 
     split = {"sources": [vars(s) for s in sources], "train": train_eps, "val": val_eps}
     run = init_wandb(args, {**vars(enc_cfg), "n_trainable_encoder": n_enc, "n_heads": n_heads,
-                            "train_frames": len(train_ds), "train_demo_frames": n_train_demo,
+                            "train_frames": len(train_ds), **{f"train_{k}_frames": n for k, n in counts.items()},
                             "val_frames": n_val})
     Trainer(args, encoder, aux_head, prog_head, enc_cfg, train_loader, val_loader, device, run,
             split).fit()

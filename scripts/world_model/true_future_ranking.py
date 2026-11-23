@@ -55,7 +55,7 @@ from scripts.imitation_policy.test_oracle_success import (
 from scripts.imitation_policy.test_oracle_success import result_files as pass_at_k_files
 
 POLICY_CKPT = "checkpoints/imitation_policy/nutAssemblyPolicy.pt"
-ENCODER_CKPT = "checkpoints/encoder/wm_encoder_best.pt"
+ENCODER_CKPT = "checkpoints/world_model_encoder/wm_encoder_best.pt"
 OUT_DIR = "results/true_future_ranking"
 BASE_SEED = 777
 

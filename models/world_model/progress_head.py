@@ -1,9 +1,14 @@
 """
 Progress head: z -> g(z) in [0, 1], an estimate of how far along the task a state is.
 
-Labels:
-    demonstration with T frames:  rho_t = t / (T - 1)      (0 at the first frame, 1 at the last)
-    random-action episode:        rho_t = 0
+Labels (see progress_labels):
+    demonstration with T frames:          rho_t = t / (T - 1)               (0 at the first frame, 1 at the last)
+    successful policy rollout:            rho_t = min(t / t_success, 1)     (1 from the success step on)
+    failed policy rollout:                rho_t = 0
+    random-action episode:                rho_t = 0
+
+Early frames of successful and failed rollouts look alike, so with a squared loss the head
+regresses towards P(success | state) * progress: a value-like score, which is what ranking needs.
 """
 import numpy as np
 import torch
@@ -11,14 +16,26 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 
-def progress_labels(length, is_demo):
+EPISODE_KINDS = ("demo", "random", "policy")
+
+
+def progress_labels(length, kind, success_step=None):
     """
-    Per-step labels (length,) float32: t / (length - 1) for a demonstration,
-    all zeros otherwise (random actions).
+    Per-step labels (length,) float32.
+
+    kind="demo":    t / (length - 1)
+    kind="random":  0
+    kind="policy":  min(t / success_step, 1) if the rollout succeeded (success_step >= 0), else 0.
+                    success_step is the index of the frame whose action completed the task.
     """
-    if not is_demo:
-        return np.zeros(length, dtype=np.float32)
-    return (np.arange(length) / max(length - 1, 1)).astype(np.float32)
+    if kind not in EPISODE_KINDS:
+        raise ValueError(f"unknown episode kind {kind!r}, expected one of {EPISODE_KINDS}")
+    t = np.arange(length, dtype=np.float64)
+    if kind == "demo":
+        return (t / max(length - 1, 1)).astype(np.float32)
+    if kind == "policy" and success_step is not None and success_step >= 0:
+        return np.minimum(t / max(success_step, 1), 1.0).astype(np.float32)
+    return np.zeros(length, dtype=np.float32)
 
 
 class ProgressHead(nn.Module):
